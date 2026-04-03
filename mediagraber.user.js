@@ -391,6 +391,33 @@
         }
     }
 
+    // ===== FILTROWANIE =====
+
+    /**
+     * Parsuje tekst w formacie "1-4, 7, 10" na zbiór indeksów (1-based).
+     * Zwraca null jeśli pole jest puste (brak filtra = pobierz wszystkie).
+     */
+    function parseRangeInput(text) {
+        const trimmed = text.trim();
+        if (!trimmed) return null;
+        const indices = new Set();
+        const parts = trimmed.split(/[,;]+/);
+        for (const part of parts) {
+            const rangMatch = part.trim().match(/^(\d+)-(\d+)$/);
+            const singleMatch = part.trim().match(/^(\d+)$/);
+            if (rangMatch) {
+                const from = parseInt(rangMatch[1], 10);
+                const to = parseInt(rangMatch[2], 10);
+                for (let i = Math.min(from, to); i <= Math.max(from, to); i++) {
+                    indices.add(i);
+                }
+            } else if (singleMatch) {
+                indices.add(parseInt(singleMatch[1], 10));
+            }
+        }
+        return indices.size > 0 ? indices : null;
+    }
+
     // ===== INTERFEJS UŻYTKOWNIKA =====
 
     function createUI() {
@@ -446,6 +473,15 @@
                 border-radius:6px;cursor:not-allowed;font-weight:bold;font-size:13px;opacity:0.4;
               ">&#127902; Pobierz Video</button>
             </div>
+            <div id="mg-video-filter" style="display:none;margin-bottom:6px">
+              <label style="font-size:11px;color:#a6adc8;display:block;margin-bottom:3px">Filtr wideo (np. <code style="color:#cba6f7">1-4, 7</code>) &ndash; puste = wszystkie:</label>
+              <input id="mg-video-range" type="text" placeholder="np. 1-4, 7, 10" style="
+                width:100%;box-sizing:border-box;padding:5px 8px;
+                background:#181825;color:#cdd6f4;border:1px solid #45475a;
+                border-radius:6px;font-size:12px;font-family:monospace;
+              ">
+              <div id="mg-video-range-hint" style="font-size:10px;color:#585b70;margin-top:2px"></div>
+            </div>
             <div id="mg-stats" style="font-size:11px;color:#585b70;text-align:center"></div>
           </div>
         `;
@@ -460,6 +496,21 @@
         const statsEl = panel.querySelector('#mg-stats');
         const bodyEl = panel.querySelector('#mg-body');
         const minimizeBtn = panel.querySelector('#mg-minimize');
+        const videoFilterEl = panel.querySelector('#mg-video-filter');
+        const videoRangeInput = panel.querySelector('#mg-video-range');
+        const videoRangeHint = panel.querySelector('#mg-video-range-hint');
+
+        // Podgląd filtra na żywo
+        videoRangeInput.addEventListener('input', () => {
+            const indices = parseRangeInput(videoRangeInput.value);
+            if (!indices) {
+                videoRangeHint.textContent = 'Pobrane zostaną wszystkie filmy.';
+            } else {
+                const sorted = Array.from(indices).sort((a, b) => a - b);
+                const total = allMaterials ? allMaterials.filter((m) => m.type === 'video').length : '?';
+                videoRangeHint.textContent = `Wybrano numery: ${sorted.join(', ')} (z ${total} filmów)`;
+            }
+        });
 
         let cancelled = false;
         const isCancelled = () => cancelled;
@@ -508,6 +559,8 @@
                 dlVideoBtn.style.opacity = '1';
                 dlVideoBtn.style.cursor = 'pointer';
                 dlVideoBtn.textContent = `🎬 Pobierz Video (${videoCount})`;
+                videoFilterEl.style.display = 'block';
+                videoRangeHint.textContent = 'Pobrane zostaną wszystkie filmy.';
             }
         }
 
@@ -574,12 +627,23 @@
         // ---- Przycisk: Pobierz Video ----
         dlVideoBtn.addEventListener('click', async () => {
             if (!allMaterials) return;
+
+            // Zastosuj filtr zakresu
+            const rangeIndices = parseRangeInput(videoRangeInput.value);
+            let videosToDownload = allMaterials.filter((m) => m.type === 'video');
+            if (rangeIndices) {
+                videosToDownload = videosToDownload.filter((_, i) => rangeIndices.has(i + 1));
+                if (videosToDownload.length === 0) {
+                    statusEl.textContent = '⚠️ Żaden film nie pasuje do podanego zakresu. Sprawdź filtr.';
+                    return;
+                }
+            }
+
             disableButtons();
             showStopButton();
-            statusEl.textContent =
-                '⚠️ Uwaga: linki do filmów zawierają tokeny, które mogą wygasnąć. Pobieranie...';
+            statusEl.textContent = `⚠️ Uwaga: linki do filmów zawierają tokeny, które mogą wygasnąć. Pobieranie ${videosToDownload.length} filmów...`;
             await new Promise((r) => setTimeout(r, 1500));
-            await downloadAll(allMaterials, 'video', (msg) => {
+            await downloadAll(videosToDownload, 'video', (msg) => {
                 statusEl.textContent = msg;
             }, isCancelled);
             hideStopButton();
