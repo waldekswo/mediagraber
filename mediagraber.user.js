@@ -264,7 +264,9 @@
                         pp: subject.num,
                         tt: 1,
                         mm: mi + 1,
-                        filename: buildFilename(subject.num, 1, mi + 1, mat.title, mat.ext)
+                        filename: buildFilename(subject.num, 1, mi + 1, mat.title, mat.ext),
+                        subjectText: stripLeadingNumber(subject.text),
+                        lessonText: ''
                     });
                 });
                 continue;
@@ -298,7 +300,9 @@
                         pp: subject.num,
                         tt: lesson.num,
                         mm: mi + 1,
-                        filename: buildFilename(subject.num, lesson.num, mi + 1, mat.title, mat.ext)
+                        filename: buildFilename(subject.num, lesson.num, mi + 1, mat.title, mat.ext),
+                        subjectText: stripLeadingNumber(subject.text),
+                        lessonText: stripLeadingNumber(lesson.text)
                     });
                 });
             }
@@ -418,6 +422,98 @@
         return indices.size > 0 ? indices : null;
     }
 
+    // ===== GENEROWANIE SPISU MATERIAŁÓW =====
+
+    function saveTextFile(content, filename) {
+        const blob = new Blob([content], { type: 'text/html;charset=utf-8' });
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+    }
+
+    function generateIndexHtml(materials, courseTitle) {
+        // Grupujemy materiały wg przedmiotu (pp) i tematu (tt)
+        const subjectsMap = new Map();
+        for (const mat of materials) {
+            if (!subjectsMap.has(mat.pp)) {
+                subjectsMap.set(mat.pp, {
+                    num: mat.pp,
+                    text: mat.subjectText || `Przedmiot ${pad2(mat.pp)}`,
+                    lessons: new Map()
+                });
+            }
+            const subj = subjectsMap.get(mat.pp);
+            if (!subj.lessons.has(mat.tt)) {
+                subj.lessons.set(mat.tt, { num: mat.tt, text: mat.lessonText || '', materials: [] });
+            }
+            subj.lessons.get(mat.tt).materials.push(mat);
+        }
+
+        const sortedSubjects = [...subjectsMap.values()].sort((a, b) => a.num - b.num);
+        const icon = (type) => type === 'pdf' ? '&#128196;' : '&#127902;';
+
+        let subjectsHtml = '';
+        for (const subj of sortedSubjects) {
+            const sortedLessons = [...subj.lessons.values()].sort((a, b) => a.num - b.num);
+            let lessonsHtml = '';
+            for (const lesson of sortedLessons) {
+                const matsHtml = lesson.materials
+                    .map(mat => `              <li><a href="${mat.filename.replace(/"/g, '&quot;')}">${icon(mat.type)} ${mat.filename}</a></li>`)
+                    .join('\n');
+                if (sortedLessons.length === 1 && !lesson.text) {
+                    lessonsHtml += `        <ul class="materials">\n${matsHtml}\n        </ul>\n`;
+                } else {
+                    const lessonLabel = lesson.text
+                        ? `${pad2(lesson.num)}. ${lesson.text}`
+                        : `Temat ${pad2(lesson.num)}`;
+                    lessonsHtml += `        <details>\n          <summary>${lessonLabel}</summary>\n          <ul class="materials">\n${matsHtml}\n          </ul>\n        </details>\n`;
+                }
+            }
+            subjectsHtml += `    <details>\n      <summary>${pad2(subj.num)}. ${subj.text}</summary>\n${lessonsHtml}    </details>\n`;
+        }
+
+        const pdfCount = materials.filter(m => m.type === 'pdf').length;
+        const videoCount = materials.filter(m => m.type === 'video').length;
+        const now = new Date().toLocaleDateString('pl-PL');
+
+        return `<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${courseTitle}</title>
+<style>
+  body{font-family:Arial,sans-serif;max-width:960px;margin:40px auto;padding:0 20px;color:#222;background:#f5f5f5}
+  h1{color:#1a4c8b;border-bottom:3px solid #1a4c8b;padding-bottom:10px;margin-bottom:6px}
+  .meta{color:#666;font-size:12px;margin-bottom:8px}
+  .stats{background:#e8f0fe;border-radius:8px;padding:10px 16px;margin-bottom:20px;font-size:13px}
+  details{margin:5px 0;background:#fff;border:1px solid #dde;border-radius:6px;overflow:hidden}
+  details details{margin:4px 12px;background:#fafafa}
+  summary{padding:10px 14px;cursor:pointer;font-weight:bold;color:#1a4c8b;list-style:none;user-select:none}
+  summary::-webkit-details-marker{display:none}
+  details details summary{font-weight:normal;color:#333;font-size:13px}
+  details[open]>summary{background:#eef3ff;border-bottom:1px solid #dde}
+  ul.materials{margin:0;padding:8px 14px 10px 28px;list-style:none}
+  ul.materials li{padding:4px 0;font-size:13px;border-bottom:1px dotted #eee}
+  ul.materials li:last-child{border-bottom:none}
+  a{color:#0066cc;text-decoration:none;word-break:break-all}
+  a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<h1>${courseTitle}</h1>
+<div class="meta">Wygenerowano: ${now}</div>
+<div class="stats">&#128196; PDF: <strong>${pdfCount}</strong> &nbsp;|&nbsp; &#127902; Filmy: <strong>${videoCount}</strong> &nbsp;|&nbsp; Razem: <strong>${materials.length}</strong> plik&#243;w</div>
+${subjectsHtml}</body>
+</html>`;
+    }
+
     // ===== INTERFEJS UŻYTKOWNIKA =====
 
     function createUI() {
@@ -482,6 +578,19 @@
               ">
               <div id="mg-video-range-hint" style="font-size:10px;color:#585b70;margin-top:2px"></div>
             </div>
+            <div id="mg-index-section" style="display:none;border-top:1px solid #45475a;padding-top:8px;margin-top:4px;margin-bottom:6px">
+              <label style="font-size:11px;color:#a6adc8;display:block;margin-bottom:3px">Tytu&#322; spisu:</label>
+              <input id="mg-course-title" type="text" placeholder="np. Psychologia - sem. IV" style="
+                width:100%;box-sizing:border-box;padding:5px 8px;margin-bottom:6px;
+                background:#181825;color:#cdd6f4;border:1px solid #45475a;
+                border-radius:6px;font-size:11px;
+              ">
+              <button id="mg-gen-index" style="
+                width:100%;padding:7px 0;
+                background:#cba6f7;color:#1e1e2e;border:none;border-radius:6px;
+                cursor:pointer;font-weight:bold;font-size:13px;
+              ">&#128221; Wygeneruj spis materia&#322;&#243;w</button>
+            </div>
             <div id="mg-stats" style="font-size:11px;color:#585b70;text-align:center"></div>
           </div>
         `;
@@ -499,6 +608,17 @@
         const videoFilterEl = panel.querySelector('#mg-video-filter');
         const videoRangeInput = panel.querySelector('#mg-video-range');
         const videoRangeHint = panel.querySelector('#mg-video-range-hint');
+        const indexSectionEl = panel.querySelector('#mg-index-section');
+        const courseTitleInput = panel.querySelector('#mg-course-title');
+        const genIndexBtn = panel.querySelector('#mg-gen-index');
+
+        genIndexBtn.addEventListener('click', () => {
+            if (!allMaterials || allMaterials.length === 0) return;
+            const title = courseTitleInput.value.trim() || 'Spis materiałów';
+            const html = generateIndexHtml(allMaterials, title);
+            saveTextFile(html, '_spis_semestr_04.html');
+            statusEl.textContent = '✅ Plik _spis_semestr_04.html został wygenerowany.';
+        });
 
         // Podgląd filtra na żywo
         videoRangeInput.addEventListener('input', () => {
@@ -561,6 +681,14 @@
                 dlVideoBtn.textContent = `🎬 Pobierz Video (${videoCount})`;
                 videoFilterEl.style.display = 'block';
                 videoRangeHint.textContent = 'Pobrane zostaną wszystkie filmy.';
+            }
+            // Pokaż sekcję generowania spisu
+            indexSectionEl.style.display = 'block';
+            if (!courseTitleInput.value) {
+                courseTitleInput.value =
+                    document.querySelector('h1')?.textContent?.trim() ||
+                    document.title.split('|')[0].trim() ||
+                    'Spis materiałów';
             }
         }
 
