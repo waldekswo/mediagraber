@@ -222,7 +222,7 @@
 
     // ===== GŁÓWNE SKANOWANIE =====
 
-    async function scanAllMaterials(onStatus) {
+    async function scanAllMaterials(onStatus, isCancelled) {
         const allMaterials = [];
 
         // 1. Zbieramy przedmioty z bieżącej strony
@@ -235,6 +235,8 @@
         onStatus(`Znaleziono ${subjects.length} przedmiotów. Rozpoczynam skanowanie...`);
 
         for (let si = 0; si < subjects.length; si++) {
+            if (isCancelled()) return allMaterials;
+
             const subject = subjects[si];
             onStatus(
                 `Skanowanie przedmiotu ${si + 1}/${subjects.length}: ${subject.text.substring(0, 60)}...`
@@ -271,6 +273,8 @@
 
             // 3. Dla każdej lekcji pobieramy materiały
             for (let li = 0; li < lessons.length; li++) {
+                if (isCancelled()) return allMaterials;
+
                 const lesson = lessons[li];
                 onStatus(
                     `Przedmiot ${si + 1}/${subjects.length}, lekcja ${li + 1}/${lessons.length}: ${lesson.text.substring(0, 50)}...`
@@ -327,7 +331,7 @@
         });
     }
 
-    async function downloadAll(materials, type, onStatus) {
+    async function downloadAll(materials, type, onStatus, isCancelled) {
         const filtered = materials.filter((m) => m.type === type);
         if (filtered.length === 0) {
             onStatus(`Brak plików typu ${type} do pobrania.`);
@@ -338,6 +342,10 @@
         let failed = 0;
 
         for (let i = 0; i < filtered.length; i++) {
+            if (isCancelled()) {
+                onStatus(`⛔ Przerwano. Pobrano ${success} z ${filtered.length} plików.`);
+                return;
+            }
             const mat = filtered[i];
             onStatus(`Pobieranie ${i + 1}/${filtered.length}: ${mat.filename}`);
             const result = await downloadFile(mat.url, mat.filename);
@@ -396,6 +404,11 @@
               background:#89b4fa;color:#1e1e2e;border:none;border-radius:6px;
               cursor:pointer;font-weight:bold;font-size:13px;
             ">&#128269; Skanuj materiały</button>
+            <button id="mg-stop" style="
+              width:100%;padding:8px 0;margin-bottom:8px;
+              background:#f38ba8;color:#1e1e2e;border:none;border-radius:6px;
+              cursor:pointer;font-weight:bold;font-size:13px;display:none;
+            ">&#9632; Przerwij</button>
             <div style="display:flex;gap:6px;margin-bottom:6px">
               <button id="mg-dl-pdf" disabled style="
                 flex:1;padding:8px 0;background:#a6e3a1;color:#1e1e2e;border:none;
@@ -414,11 +427,34 @@
 
         const statusEl = panel.querySelector('#mg-status');
         const scanBtn = panel.querySelector('#mg-scan');
+        const stopBtn = panel.querySelector('#mg-stop');
         const dlPdfBtn = panel.querySelector('#mg-dl-pdf');
         const dlVideoBtn = panel.querySelector('#mg-dl-video');
         const statsEl = panel.querySelector('#mg-stats');
         const bodyEl = panel.querySelector('#mg-body');
         const minimizeBtn = panel.querySelector('#mg-minimize');
+
+        let cancelled = false;
+        const isCancelled = () => cancelled;
+
+        stopBtn.addEventListener('click', () => {
+            cancelled = true;
+            stopBtn.disabled = true;
+            stopBtn.style.opacity = '0.5';
+            stopBtn.textContent = '⏳ Przerywanie...';
+        });
+
+        function showStopButton() {
+            cancelled = false;
+            stopBtn.style.display = 'block';
+            stopBtn.disabled = false;
+            stopBtn.style.opacity = '1';
+            stopBtn.textContent = '⏹ Przerwij';
+        }
+
+        function hideStopButton() {
+            stopBtn.style.display = 'none';
+        }
 
         let minimized = false;
         minimizeBtn.addEventListener('click', () => {
@@ -458,6 +494,7 @@
 
         scanBtn.addEventListener('click', async () => {
             disableButtons();
+            showStopButton();
             scanBtn.textContent = '⏳ Skanowanie...';
             statsEl.textContent = '';
             allMaterials = null;
@@ -465,13 +502,19 @@
             try {
                 allMaterials = await scanAllMaterials((msg) => {
                     statusEl.textContent = msg;
-                });
+                }, isCancelled);
 
-                const pdfCount = allMaterials.filter((m) => m.type === 'pdf').length;
-                const videoCount = allMaterials.filter((m) => m.type === 'video').length;
-
-                statusEl.textContent = `✅ Skanowanie zakończone! PDF-y: ${pdfCount}, Filmy: ${videoCount}`;
-                statsEl.textContent = `Łącznie ${allMaterials.length} materiałów w ${pdfCount + videoCount > 0 ? '' : 'żadnym '}pliku`;
+                if (isCancelled()) {
+                    const pdfCount = allMaterials.filter((m) => m.type === 'pdf').length;
+                    const videoCount = allMaterials.filter((m) => m.type === 'video').length;
+                    statusEl.textContent = `⛔ Skanowanie przerwane. Zebrano: PDF-y: ${pdfCount}, Filmy: ${videoCount}`;
+                    statsEl.textContent = `Łącznie ${allMaterials.length} materiałów`;
+                } else {
+                    const pdfCount = allMaterials.filter((m) => m.type === 'pdf').length;
+                    const videoCount = allMaterials.filter((m) => m.type === 'video').length;
+                    statusEl.textContent = `✅ Skanowanie zakończone! PDF-y: ${pdfCount}, Filmy: ${videoCount}`;
+                    statsEl.textContent = `Łącznie ${allMaterials.length} materiałów w ${pdfCount + videoCount > 0 ? '' : 'żadnym '}pliku`;
+                }
 
                 enableDownloadButtons();
             } catch (e) {
@@ -479,6 +522,7 @@
                 console.error('[MediaGrabber] Błąd skanowania:', e);
             }
 
+            hideStopButton();
             scanBtn.disabled = false;
             scanBtn.style.opacity = '1';
             scanBtn.style.cursor = 'pointer';
@@ -489,9 +533,11 @@
         dlPdfBtn.addEventListener('click', async () => {
             if (!allMaterials) return;
             disableButtons();
+            showStopButton();
             await downloadAll(allMaterials, 'pdf', (msg) => {
                 statusEl.textContent = msg;
-            });
+            }, isCancelled);
+            hideStopButton();
             scanBtn.disabled = false;
             scanBtn.style.opacity = '1';
             scanBtn.style.cursor = 'pointer';
@@ -502,12 +548,14 @@
         dlVideoBtn.addEventListener('click', async () => {
             if (!allMaterials) return;
             disableButtons();
+            showStopButton();
             statusEl.textContent =
                 '⚠️ Uwaga: linki do filmów zawierają tokeny, które mogą wygasnąć. Pobieranie...';
             await new Promise((r) => setTimeout(r, 1500));
             await downloadAll(allMaterials, 'video', (msg) => {
                 statusEl.textContent = msg;
-            });
+            }, isCancelled);
+            hideStopButton();
             scanBtn.disabled = false;
             scanBtn.style.opacity = '1';
             scanBtn.style.cursor = 'pointer';
