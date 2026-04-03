@@ -145,12 +145,12 @@
         let currentTitle = '';
         let currentNum = 0;
 
-        // Pobieramy elementy w kolejności DOM: tytuły, pdf-container, video
+        // Pobieramy elementy w kolejności DOM: tytuły, pdf-container, kontenery wideo
         // querySelectorAll zachowuje kolejność dokumentu
-        // video.video-js  – surowy HTML z serwera (przed inicjalizacją VideoJS)
-        // video.vjs-tech  – przetworzone DOM na bieżącej stronie (po inicjalizacji VideoJS)
+        // Wideo są opakowane w <span data-id="..."> (zarówno w surowym HTML jak i po inicjalizacji VideoJS)
+        // PDF-y w <div class="pdf-container" data-url="...">
         const elements = Array.from(
-            matscroll.querySelectorAll('p > b, .pdf-container[data-url], video.video-js, video.vjs-tech')
+            matscroll.querySelectorAll('p > b, .pdf-container[data-url], span[data-id]')
         );
 
         for (const el of elements) {
@@ -170,19 +170,40 @@
                     num: currentNum,
                     ext: ext === 'pdf' ? 'pdf' : 'pdf'
                 });
-            } else if (el.tagName === 'VIDEO') {
-                // Wideo – wybieramy najniższą dostępną jakość
-                const sources = Array.from(el.querySelectorAll('source'));
-                if (sources.length === 0) continue;
+            } else if (el.tagName === 'SPAN' && el.dataset.id) {
+                // Kontener wideo – szukamy <source> na dowolnej głębokości (działa niezależnie
+                // od tego czy VideoJS już zainicjalizował strukturę DOM czy nie)
+                let sources = Array.from(el.querySelectorAll('source'));
 
+                // Fallback: jeśli DOM nie zawiera <source> (źródła ładowane przez JS),
+                // szukamy URL-i do ultracloud.pl bezpośrednio w innerHTML za pomocą regex
+                if (sources.length === 0) {
+                    const urlRegex = /https?:\/\/[^\s"']*ultracloud\.pl[^\s"']*\.(webm|mp4|mkv|avi|mov)[^\s"']*/gi;
+                    const found = [];
+                    let m;
+                    while ((m = urlRegex.exec(el.innerHTML)) !== null) {
+                        found.push({ getAttribute: () => m[0], src: m[0] });
+                    }
+                    sources = found;
+                    if (found.length > 0) {
+                        console.log('[MediaGrabber] Wideo znalezione przez regex fallback, data-id:', el.dataset.id);
+                    } else {
+                        console.warn('[MediaGrabber] Brak źródeł wideo dla span[data-id=' + el.dataset.id + ']');
+                        continue;
+                    }
+                }
+
+                // Wybieramy najniższą dostępną jakość
+                const getSrc = (s) => (typeof s.getAttribute === 'function' ? s.getAttribute('src') : s.src) || '';
                 const best =
-                    sources.find((s) => s.src.includes('_480')) ||
-                    sources.find((s) => s.src.includes('_720')) ||
-                    sources.find((s) => s.src.includes('_1080')) ||
+                    sources.find((s) => getSrc(s).includes('_480')) ||
+                    sources.find((s) => getSrc(s).includes('_720')) ||
+                    sources.find((s) => getSrc(s).includes('_1080')) ||
                     sources[0];
 
-                if (best && best.src) {
-                    const srcUrl = best.src;
+                if (best) {
+                    const srcUrl = getSrc(best);
+                    if (!srcUrl) continue;
                     const extMatch = srcUrl.match(/\.(webm|mp4|avi|mov|mkv)(\?|$)/i);
                     const ext = extMatch ? extMatch[1].toLowerCase() : 'webm';
                     materials.push({
