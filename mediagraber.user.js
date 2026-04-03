@@ -169,14 +169,14 @@
                     ext: ext === 'pdf' ? 'pdf' : 'pdf'
                 });
             } else if (el.tagName === 'VIDEO') {
-                // Wideo – wybieramy najwyższą dostępną jakość
+                // Wideo – wybieramy najniższą dostępną jakość
                 const sources = Array.from(el.querySelectorAll('source'));
                 if (sources.length === 0) continue;
 
                 const best =
-                    sources.find((s) => s.src.includes('_1080')) ||
-                    sources.find((s) => s.src.includes('_720')) ||
                     sources.find((s) => s.src.includes('_480')) ||
+                    sources.find((s) => s.src.includes('_720')) ||
+                    sources.find((s) => s.src.includes('_1080')) ||
                     sources[0];
 
                 if (best && best.src) {
