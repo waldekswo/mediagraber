@@ -5,7 +5,6 @@
 // @description  Pobiera materiały (PDF i wideo) z platformy studia-online.pl z automatycznym nazewnictwem PP.TT.MM
 // @author       MediaGrabber
 // @match        https://studia-online.pl/kurs/*
-// @grant        GM_download
 // @grant        GM_xmlhttpRequest
 // @connect      studia-online.pl
 // @connect      ultracloud.pl
@@ -310,13 +309,43 @@
 
     // ===== POBIERANIE =====
 
+    /**
+     * Pobiera plik przez GM_xmlhttpRequest (omija CORS, wysyła Referer) jako blob,
+     * a następnie wyzwala pobieranie przez tymczasowy element <a>.
+     * GM_download nie działa z tym CDN (zwraca 403 z kontekstu service-workera MV3).
+     */
     function downloadFile(url, filename) {
         return new Promise((resolve) => {
-            GM_download({
+            GM_xmlhttpRequest({
+                method: 'GET',
                 url: url,
-                name: filename,
-                saveAs: false,
-                onload: () => resolve({ ok: true }),
+                responseType: 'blob',
+                headers: {
+                    'Referer': 'https://studia-online.pl/'
+                },
+                onload: (response) => {
+                    if (response.status >= 200 && response.status < 400) {
+                        try {
+                            const blob = response.response;
+                            const blobUrl = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = blobUrl;
+                            a.download = filename;
+                            a.style.display = 'none';
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+                            resolve({ ok: true });
+                        } catch (e) {
+                            console.warn('[MediaGrabber] Błąd zapisu blob:', filename, e);
+                            resolve({ ok: false, err: e.message });
+                        }
+                    } else {
+                        console.warn('[MediaGrabber] HTTP', response.status, 'dla:', filename);
+                        resolve({ ok: false, err: `HTTP ${response.status}` });
+                    }
+                },
                 onerror: (err) => {
                     console.warn('[MediaGrabber] Błąd pobierania:', filename, err);
                     resolve({ ok: false, err });
@@ -326,8 +355,6 @@
                     resolve({ ok: false, err: 'timeout' });
                 }
             });
-            // Krókie opóźnienie między plikami, by przeglądarka uruchomiła pobieranie
-            setTimeout(resolve, 800);
         });
     }
 
