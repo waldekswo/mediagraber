@@ -147,8 +147,10 @@
 
         // Pobieramy elementy w kolejności DOM: tytuły, pdf-container, video
         // querySelectorAll zachowuje kolejność dokumentu
+        // video.video-js  – surowy HTML z serwera (przed inicjalizacją VideoJS)
+        // video.vjs-tech  – przetworzone DOM na bieżącej stronie (po inicjalizacji VideoJS)
         const elements = Array.from(
-            matscroll.querySelectorAll('p > b, .pdf-container[data-url], video.vjs-tech')
+            matscroll.querySelectorAll('p > b, .pdf-container[data-url], video.video-js, video.vjs-tech')
         );
 
         for (const el of elements) {
