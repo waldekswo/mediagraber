@@ -6,6 +6,7 @@
 // @author       MediaGrabber
 // @match        https://studia-online.pl/kurs/*
 // @grant        GM_xmlhttpRequest
+// @grant        GM_download
 // @connect      studia-online.pl
 // @connect      ultracloud.pl
 // @connect      *.ultracloud.pl
@@ -314,55 +315,71 @@
     // ===== POBIERANIE =====
 
     /**
-     * Pobiera plik przez GM_xmlhttpRequest (omija CORS, wysyła Referer) jako blob,
-     * a następnie wyzwala pobieranie przez tymczasowy element <a>.
-     * GM_download nie działa z tym CDN (zwraca 403 z kontekstu service-workera MV3).
+     * Pobiera plik natywnie przez GM_download (z Refererem) – omija MV3 binary-transfer bug.
+     * Fallback: GM_xmlhttpRequest + arraybuffer gdy GM_download zwróci błąd != 403.
      */
     function downloadFile(url, filename) {
         return new Promise((resolve) => {
-            GM_xmlhttpRequest({
-                method: 'GET',
+            // --- Próba 1: GM_download (natywny download managera, bez transferu binarnego przez SW) ---
+            GM_download({
                 url: url,
-                responseType: 'arraybuffer',
+                name: filename,
+                saveAs: false,
                 headers: {
                     'Referer': 'https://studia-online.pl/'
                 },
-                onload: (response) => {
-                    if (response.status >= 200 && response.status < 400) {
-                        try {
-                            const buffer = response.response;
-                            if (!buffer || buffer.byteLength === 0) {
-                                throw new Error('Pusta odpowiedź (brak danych)');
-                            }
-                            const contentType = (response.responseHeaders || '')
-                                .match(/content-type:\s*([^\r\n;]+)/i)?.[1]?.trim()
-                                || 'application/octet-stream';
-                            const blob = new Blob([buffer], { type: contentType });
-                            const blobUrl = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = blobUrl;
-                            a.download = filename;
-                            a.style.display = 'none';
-                            document.body.appendChild(a);
-                            a.click();
-                            document.body.removeChild(a);
-                            setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-                            resolve({ ok: true });
-                        } catch (e) {
-                            console.warn('[MediaGrabber] Błąd zapisu blob:', filename, e);
-                            resolve({ ok: false, err: e.message });
-                        }
+                onload: () => resolve({ ok: true }),
+                onerror: (err) => {
+                    const status = err.details && err.details.current
+                        ? err.details.current
+                        : (err.error || '');
+                    console.warn('[MediaGrabber] GM_download błąd:', filename, err);
+                    if (String(status) === '403' || err.error === 'not_succeeded') {
+                        // --- Fallback: arraybuffer przez GM_xmlhttpRequest ---
+                        GM_xmlhttpRequest({
+                            method: 'GET',
+                            url: url,
+                            responseType: 'arraybuffer',
+                            headers: { 'Referer': 'https://studia-online.pl/' },
+                            onload: (response) => {
+                                if (response.status >= 200 && response.status < 400) {
+                                    try {
+                                        const buffer = response.response;
+                                        if (!buffer || buffer.byteLength === 0) {
+                                            throw new Error('Pusta odpowiedź (brak danych)');
+                                        }
+                                        const contentType = (response.responseHeaders || '')
+                                            .match(/content-type:\s*([^\r\n;]+)/i)?.[1]?.trim()
+                                            || 'application/octet-stream';
+                                        const blob = new Blob([buffer], { type: contentType });
+                                        const blobUrl = URL.createObjectURL(blob);
+                                        const a = document.createElement('a');
+                                        a.href = blobUrl;
+                                        a.download = filename;
+                                        a.style.display = 'none';
+                                        document.body.appendChild(a);
+                                        a.click();
+                                        document.body.removeChild(a);
+                                        setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+                                        resolve({ ok: true });
+                                    } catch (e) {
+                                        console.warn('[MediaGrabber] Błąd zapisu blob:', filename, e);
+                                        resolve({ ok: false, err: e.message });
+                                    }
+                                } else {
+                                    console.warn('[MediaGrabber] HTTP', response.status, 'dla:', filename);
+                                    resolve({ ok: false, err: `HTTP ${response.status}` });
+                                }
+                            },
+                            onerror: (e) => { console.warn('[MediaGrabber] Błąd pobierania:', filename, e); resolve({ ok: false, err: e }); },
+                            ontimeout: () => { console.warn('[MediaGrabber] Timeout:', filename); resolve({ ok: false, err: 'timeout' }); }
+                        });
                     } else {
-                        console.warn('[MediaGrabber] HTTP', response.status, 'dla:', filename);
-                        resolve({ ok: false, err: `HTTP ${response.status}` });
+                        resolve({ ok: false, err: err.error || 'GM_download error' });
                     }
                 },
-                onerror: (err) => {
-                    console.warn('[MediaGrabber] Błąd pobierania:', filename, err);
-                    resolve({ ok: false, err });
-                },
                 ontimeout: () => {
-                    console.warn('[MediaGrabber] Timeout pobierania:', filename);
+                    console.warn('[MediaGrabber] GM_download timeout:', filename);
                     resolve({ ok: false, err: 'timeout' });
                 }
             });
