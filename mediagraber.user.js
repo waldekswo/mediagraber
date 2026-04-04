@@ -323,14 +323,21 @@
             GM_xmlhttpRequest({
                 method: 'GET',
                 url: url,
-                responseType: 'blob',
+                responseType: 'arraybuffer',
                 headers: {
                     'Referer': 'https://studia-online.pl/'
                 },
                 onload: (response) => {
                     if (response.status >= 200 && response.status < 400) {
                         try {
-                            const blob = response.response;
+                            const buffer = response.response;
+                            if (!buffer || buffer.byteLength === 0) {
+                                throw new Error('Pusta odpowiedź (brak danych)');
+                            }
+                            const contentType = (response.responseHeaders || '')
+                                .match(/content-type:\s*([^\r\n;]+)/i)?.[1]?.trim()
+                                || 'application/octet-stream';
+                            const blob = new Blob([buffer], { type: contentType });
                             const blobUrl = URL.createObjectURL(blob);
                             const a = document.createElement('a');
                             a.href = blobUrl;
