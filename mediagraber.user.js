@@ -392,7 +392,7 @@
             console.log('[MediaGrabber] fetch() OK:', filename);
             return { ok: true };
         } catch (fetchErr) {
-            console.warn('[MediaGrabber] fetch() nieudany:', filename, fetchErr.message);
+            console.log('[MediaGrabber] fetch() nieudany (oczekiwany CORS) – przechodzę do chunked:', fetchErr.message);
         }
 
         // --- Próba 2: chunked GM_xmlhttpRequest z Range headers ---
