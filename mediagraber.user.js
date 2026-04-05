@@ -315,7 +315,7 @@
 
     // ===== POBIERANIE =====
 
-    const CHUNK_SIZE = 128 * 1024 * 1024; // 128 MB
+    const CHUNK_SIZE = 16 * 1024 * 1024; // 16 MB
 
     function xhrChunk(url, start, end) {
         return new Promise((resolve, reject) => {
@@ -323,6 +323,7 @@
                 method: 'GET',
                 url,
                 responseType: 'arraybuffer',
+                timeout: 120000,
                 headers: {
                     'Referer': 'https://studia-online.pl/',
                     'Range': `bytes=${start}-${end}`
@@ -335,7 +336,7 @@
                     }
                 },
                 onerror: (e) => reject(new Error('sieć')),
-                ontimeout: () => reject(new Error('timeout'))
+                ontimeout: () => reject(new Error('timeout (>120s)'))
             });
         });
     }
