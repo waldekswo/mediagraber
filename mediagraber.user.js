@@ -315,7 +315,7 @@
 
     // ===== POBIERANIE =====
 
-    const CHUNK_SIZE = 16 * 1024 * 1024; // 16 MB
+    const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB – limit CDN ultracloud.pl
 
     function xhrChunk(url, start, end) {
         return new Promise((resolve, reject) => {
@@ -411,16 +411,23 @@
                 report(`⬇️ ${filename.substring(0, 45)}… część ${chunkIdx}/${totalChunks}`);
 
                 let chunk;
-                try {
-                    chunk = await xhrChunk(url, offset, end);
-                } catch (e) {
-                    console.warn('[MediaGrabber] Błąd fragmentu', chunkIdx, filename, e.message);
-                    return { ok: false, err: e.message };
+                let lastErr;
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                        chunk = await xhrChunk(url, offset, end);
+                        if (chunk && chunk.byteLength > 0) { lastErr = null; break; }
+                        lastErr = new Error('empty chunk');
+                    } catch (e) {
+                        lastErr = e;
+                        if (attempt < 3) {
+                            console.warn(`[MediaGrabber] Fragment ${chunkIdx} próba ${attempt} nieudana, retry...`, e.message);
+                            await new Promise((r) => setTimeout(r, 1500 * attempt));
+                        }
+                    }
                 }
-
-                if (!chunk || chunk.byteLength === 0) {
-                    console.warn('[MediaGrabber] Pusty fragment', chunkIdx, filename);
-                    return { ok: false, err: 'empty chunk' };
+                if (lastErr || !chunk || chunk.byteLength === 0) {
+                    console.warn('[MediaGrabber] Błąd fragmentu', chunkIdx, filename, lastErr?.message);
+                    return { ok: false, err: lastErr?.message || 'empty chunk' };
                 }
 
                 chunks.push(chunk);
