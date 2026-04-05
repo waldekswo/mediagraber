@@ -1,12 +1,11 @@
 // ==UserScript==
 // @name         MediaGrabber - Studia Online
 // @namespace    https://studia-online.pl/
-// @version      1.1.0
+// @version      1.2.0
 // @description  Pobiera materiały (PDF i wideo) z platformy studia-online.pl z automatycznym nazewnictwem PP.TT.MM
 // @author       MediaGrabber
 // @match        https://studia-online.pl/kurs/*
 // @grant        GM_xmlhttpRequest
-// @grant        GM_download
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @connect      studia-online.pl
@@ -316,60 +315,149 @@
 
     // ===== POBIERANIE =====
 
+    const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB – bezpiecznie poniżej limitu transferu SW→content-script
+
+    function xhrChunk(url, start, end) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url,
+                responseType: 'arraybuffer',
+                headers: {
+                    'Referer': 'https://studia-online.pl/',
+                    'Range': `bytes=${start}-${end}`
+                },
+                onload: (r) => {
+                    if (r.status === 206 || r.status === 200) {
+                        resolve(r.response);
+                    } else {
+                        reject(new Error(`HTTP ${r.status}`));
+                    }
+                },
+                onerror: (e) => reject(new Error('sieć')),
+                ontimeout: () => reject(new Error('timeout'))
+            });
+        });
+    }
+
+    function xhrHead(url) {
+        return new Promise((resolve) => {
+            GM_xmlhttpRequest({
+                method: 'HEAD',
+                url,
+                headers: { 'Referer': 'https://studia-online.pl/' },
+                onload: (r) => {
+                    const m = (r.responseHeaders || '').match(/content-length:\s*(\d+)/i);
+                    resolve(m ? parseInt(m[1], 10) : null);
+                },
+                onerror: () => resolve(null),
+                ontimeout: () => resolve(null)
+            });
+        });
+    }
+
+    function triggerBlobDownload(chunks, filename) {
+        const ext = filename.split('.').pop().toLowerCase();
+        const mime = ext === 'mp4' ? 'video/mp4'
+                   : ext === 'webm' ? 'video/webm'
+                   : ext === 'pdf'  ? 'application/pdf'
+                   : 'application/octet-stream';
+        const blob = new Blob(chunks, { type: mime });
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 120000);
+    }
+
     /**
-     * Strategia pobierania (MV3-safe):
-     *   1. Natywny fetch() – działa w kontekście content-script (nie przez SW),
-     *      brak problemu z transferem binarnym; CORS musi być otwarty po stronie CDN.
-     *   2. GM_download bez niestandardowych nagłówków – chrome.downloads API, omija SW.
-     *   3. GM_download z Refererem – na wypadek gdyby CDN wymagał nagłówka.
+     * Pobieranie fragmentowane (chunked) przez GM_xmlhttpRequest + Range headers.
+     * Każdy fragment (4 MB) przechodzi przez SW→content-script bez błędu alokacji.
+     * Całość jest składana w Blob bezpośrednio w kontekście content-scripta.
      */
-    async function downloadFile(url, filename) {
-        // --- Próba 1: natywny fetch() (content-script context, zero MV3 binary-transfer bug) ---
+    async function downloadFile(url, filename, onProgress) {
+        const report = (msg) => { if (onProgress) onProgress(msg); };
+
+        // --- Próba 1: natywny fetch() (działa gdy CDN ma CORS) ---
         try {
             const resp = await fetch(url, { credentials: 'include' });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const blob = await resp.blob();
             if (!blob || blob.size === 0) throw new Error('Pusty blob');
-            const blobUrl = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = blobUrl;
-            a.download = filename;
-            a.style.display = 'none';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+            triggerBlobDownload([blob], filename);
             console.log('[MediaGrabber] fetch() OK:', filename);
             return { ok: true };
         } catch (fetchErr) {
             console.warn('[MediaGrabber] fetch() nieudany:', filename, fetchErr.message);
         }
 
-        // --- Próba 2 & 3: GM_download (chrome.downloads API, nie przechodzi przez SW) ---
-        const tryGmDownload = (headers) =>
-            new Promise((resolve) => {
-                GM_download({
+        // --- Próba 2: chunked GM_xmlhttpRequest z Range headers ---
+        const totalSize = await xhrHead(url);
+
+        if (totalSize !== null && totalSize > 0) {
+            const totalChunks = Math.ceil(totalSize / CHUNK_SIZE);
+            const chunks = [];
+            let offset = 0;
+            let chunkIdx = 0;
+
+            while (offset < totalSize) {
+                const end = Math.min(offset + CHUNK_SIZE - 1, totalSize - 1);
+                chunkIdx++;
+                report(`⬇️ ${filename.substring(0, 45)}… część ${chunkIdx}/${totalChunks}`);
+
+                let chunk;
+                try {
+                    chunk = await xhrChunk(url, offset, end);
+                } catch (e) {
+                    console.warn('[MediaGrabber] Błąd fragmentu', chunkIdx, filename, e.message);
+                    return { ok: false, err: e.message };
+                }
+
+                if (!chunk || chunk.byteLength === 0) {
+                    console.warn('[MediaGrabber] Pusty fragment', chunkIdx, filename);
+                    return { ok: false, err: 'empty chunk' };
+                }
+
+                chunks.push(chunk);
+                offset += CHUNK_SIZE;
+            }
+
+            try {
+                triggerBlobDownload(chunks, filename);
+                console.log('[MediaGrabber] Chunked OK:', filename, `(${totalChunks} części)`);
+                return { ok: true };
+            } catch (e) {
+                console.warn('[MediaGrabber] Błąd składania blob:', filename, e);
+                return { ok: false, err: e.message };
+            }
+        }
+
+        // --- Próba 3: pojedynczy strzał (mały plik lub brak Content-Length) ---
+        try {
+            const buffer = await new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method: 'GET',
                     url,
-                    name: filename,
-                    saveAs: false,
-                    ...(headers ? { headers } : {}),
-                    onload: () => {
-                        console.log('[MediaGrabber] GM_download OK:', filename, headers ? '(z Referer)' : '(bez nagłówków)');
-                        resolve(true);
+                    responseType: 'arraybuffer',
+                    headers: { 'Referer': 'https://studia-online.pl/' },
+                    onload: (r) => {
+                        if (r.status >= 200 && r.status < 400) resolve(r.response);
+                        else reject(new Error(`HTTP ${r.status}`));
                     },
-                    onerror: (err) => {
-                        console.warn('[MediaGrabber] GM_download błąd:', filename, JSON.stringify(err));
-                        resolve(false);
-                    },
-                    ontimeout: () => {
-                        console.warn('[MediaGrabber] GM_download timeout:', filename);
-                        resolve(false);
-                    }
+                    onerror: (e) => reject(new Error('sieć')),
+                    ontimeout: () => reject(new Error('timeout'))
                 });
             });
-
-        if (await tryGmDownload(null)) return { ok: true };
-        if (await tryGmDownload({ 'Referer': 'https://studia-online.pl/' })) return { ok: true };
+            if (!buffer || buffer.byteLength === 0) throw new Error('Pusta odpowiedź');
+            triggerBlobDownload([buffer], filename);
+            return { ok: true };
+        } catch (e) {
+            console.warn('[MediaGrabber] Pojedynczy strzał nieudany:', filename, e.message);
+        }
 
         console.warn('[MediaGrabber] Wszystkie metody nieudane:', filename);
         return { ok: false, err: 'all methods failed' };
@@ -392,13 +480,13 @@
             }
             const mat = filtered[i];
             onStatus(`Pobieranie ${i + 1}/${filtered.length}: ${mat.filename}`);
-            const result = await downloadFile(mat.url, mat.filename);
+            const result = await downloadFile(mat.url, mat.filename, onStatus);
             if (result && result.ok === false) {
                 failed++;
             } else {
                 success++;
             }
-            await new Promise((r) => setTimeout(r, 400));
+            await new Promise((r) => setTimeout(r, 300));
         }
 
         if (failed > 0) {
