@@ -315,7 +315,7 @@
 
     // ===== POBIERANIE =====
 
-    const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB – bezpiecznie poniżej limitu transferu SW→content-script
+    const CHUNK_SIZE = 128 * 1024 * 1024; // 128 MB
 
     function xhrChunk(url, start, end) {
         return new Promise((resolve, reject) => {
