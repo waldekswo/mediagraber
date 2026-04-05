@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         MediaGrabber - Studia Online
 // @namespace    https://studia-online.pl/
-// @version      1.0.3
+// @version      1.1.0
 // @description  Pobiera materiały (PDF i wideo) z platformy studia-online.pl z automatycznym nazewnictwem PP.TT.MM
 // @author       MediaGrabber
 // @match        https://studia-online.pl/kurs/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
+// @grant        GM_setValue
+// @grant        GM_getValue
 // @connect      studia-online.pl
 // @connect      ultracloud.pl
 // @connect      *.ultracloud.pl
@@ -525,6 +527,35 @@ ${subjectsHtml}</body>
 </html>`;
     }
 
+    // ===== CACHE =====
+
+    function getCacheKey() {
+        const m = window.location.pathname.match(/\/kurs\/(\d+)/);
+        return m ? `mg_cache_${m[1]}` : 'mg_cache_default';
+    }
+
+    function saveCache(materials) {
+        try {
+            GM_setValue(getCacheKey(), JSON.stringify({
+                savedAt: new Date().toISOString(),
+                materials
+            }));
+        } catch (e) {
+            console.warn('[MediaGrabber] Błąd zapisu cache:', e);
+        }
+    }
+
+    function loadCache() {
+        try {
+            const raw = GM_getValue(getCacheKey(), null);
+            if (!raw) return null;
+            return JSON.parse(raw);
+        } catch (e) {
+            console.warn('[MediaGrabber] Błąd odczytu cache:', e);
+            return null;
+        }
+    }
+
     // ===== INTERFEJS UŻYTKOWNIKA =====
 
     function createUI() {
@@ -675,6 +706,19 @@ ${subjectsHtml}</body>
         // ---- Przycisk: Skanuj ----
         let allMaterials = null;
 
+        // Wczytaj zapisane wyniki skanowania
+        const cached = loadCache();
+        if (cached && Array.isArray(cached.materials) && cached.materials.length > 0) {
+            allMaterials = cached.materials;
+            const d = new Date(cached.savedAt).toLocaleString('pl-PL');
+            const pdfC = allMaterials.filter((m) => m.type === 'pdf').length;
+            const vidC = allMaterials.filter((m) => m.type === 'video').length;
+            statusEl.textContent = `📂 Wczytano zapisane wyniki (${d}). PDF: ${pdfC}, Video: ${vidC}.`;
+            statsEl.textContent = `Łącznie ${allMaterials.length} materiałów (z cache)`;
+            enableDownloadButtons();
+            scanBtn.textContent = '🔄 Skanuj ponownie';
+        }
+
         function enableDownloadButtons() {
             const pdfCount = allMaterials ? allMaterials.filter((m) => m.type === 'pdf').length : 0;
             const videoCount = allMaterials ? allMaterials.filter((m) => m.type === 'video').length : 0;
@@ -733,6 +777,7 @@ ${subjectsHtml}</body>
                     const videoCount = allMaterials.filter((m) => m.type === 'video').length;
                     statusEl.textContent = `✅ Skanowanie zakończone! PDF-y: ${pdfCount}, Filmy: ${videoCount}`;
                     statsEl.textContent = `Łącznie ${allMaterials.length} materiałów w ${pdfCount + videoCount > 0 ? '' : 'żadnym '}pliku`;
+                    saveCache(allMaterials);
                 }
 
                 enableDownloadButtons();
