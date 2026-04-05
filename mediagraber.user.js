@@ -315,7 +315,7 @@
 
     // ===== POBIERANIE =====
 
-    const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB – limit CDN ultracloud.pl
+    // CHUNK_SIZE is configured by the user in the UI (default 4 MB)
 
     function xhrChunk(url, start, end) {
         return new Promise((resolve, reject) => {
@@ -380,7 +380,8 @@
      * Każdy fragment (4 MB) przechodzi przez SW→content-script bez błędu alokacji.
      * Całość jest składana w Blob bezpośrednio w kontekście content-scripta.
      */
-    async function downloadFile(url, filename, onProgress) {
+    async function downloadFile(url, filename, onProgress, chunkSize) {
+        const CHUNK_SIZE = (chunkSize && chunkSize > 0 ? chunkSize : 4) * 1024 * 1024;
         const report = (msg) => { if (onProgress) onProgress(msg); };
 
         // --- Próba 1: natywny fetch() (działa gdy CDN ma CORS) ---
@@ -471,7 +472,7 @@
         return { ok: false, err: 'all methods failed' };
     }
 
-    async function downloadAll(materials, type, onStatus, isCancelled) {
+    async function downloadAll(materials, type, onStatus, isCancelled, chunkMB) {
         const filtered = materials.filter((m) => m.type === type);
         if (filtered.length === 0) {
             onStatus(`Brak plików typu ${type} do pobrania.`);
@@ -488,7 +489,7 @@
             }
             const mat = filtered[i];
             onStatus(`Pobieranie ${i + 1}/${filtered.length}: ${mat.filename}`);
-            const result = await downloadFile(mat.url, mat.filename, onStatus);
+            const result = await downloadFile(mat.url, mat.filename, onStatus, chunkMB || 4);
             if (result && result.ok === false) {
                 failed++;
             } else {
@@ -715,6 +716,15 @@ ${subjectsHtml}</body>
                 border-radius:6px;font-size:12px;font-family:monospace;
               ">
               <div id="mg-video-range-hint" style="font-size:10px;color:#585b70;margin-top:2px"></div>
+              <div style="display:flex;align-items:center;gap:6px;margin-top:6px">
+                <label for="mg-chunk-size" style="font-size:11px;color:#a6adc8;white-space:nowrap">Rozmiar fragmentu:</label>
+                <input id="mg-chunk-size" type="number" min="1" max="512" value="4" style="
+                  width:64px;padding:4px 6px;
+                  background:#181825;color:#cdd6f4;border:1px solid #45475a;
+                  border-radius:6px;font-size:12px;font-family:monospace;text-align:right;
+                ">
+                <span style="font-size:11px;color:#a6adc8">MB</span>
+              </div>
             </div>
             <div id="mg-index-section" style="display:none;border-top:1px solid #45475a;padding-top:8px;margin-top:4px;margin-bottom:6px">
               <label style="font-size:11px;color:#a6adc8;display:block;margin-bottom:3px">Tytu&#322; spisu:</label>
@@ -746,6 +756,7 @@ ${subjectsHtml}</body>
         const videoFilterEl = panel.querySelector('#mg-video-filter');
         const videoRangeInput = panel.querySelector('#mg-video-range');
         const videoRangeHint = panel.querySelector('#mg-video-range-hint');
+        const chunkSizeInput = panel.querySelector('#mg-chunk-size');
         const indexSectionEl = panel.querySelector('#mg-index-section');
         const courseTitleInput = panel.querySelector('#mg-course-title');
         const genIndexBtn = panel.querySelector('#mg-gen-index');
@@ -896,7 +907,7 @@ ${subjectsHtml}</body>
             showStopButton();
             await downloadAll(allMaterials, 'pdf', (msg) => {
                 statusEl.textContent = msg;
-            }, isCancelled);
+            }, isCancelled, parseInt(chunkSizeInput.value, 10) || 4);
             hideStopButton();
             scanBtn.disabled = false;
             scanBtn.style.opacity = '1';
@@ -925,7 +936,7 @@ ${subjectsHtml}</body>
             await new Promise((r) => setTimeout(r, 1500));
             await downloadAll(videosToDownload, 'video', (msg) => {
                 statusEl.textContent = msg;
-            }, isCancelled);
+            }, isCancelled, parseInt(chunkSizeInput.value, 10) || 4);
             hideStopButton();
             scanBtn.disabled = false;
             scanBtn.style.opacity = '1';
