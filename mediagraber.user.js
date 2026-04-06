@@ -946,9 +946,52 @@ ${subjectsHtml}</body>
     }
 
     // ===== INICJALIZACJA =====
+
+    /**
+     * Tworzy panel tylko gdy go nie ma i jesteśmy na stronie /kurs/*.
+     * Bezpieczne do ponownego wywołania (idempotent).
+     */
+    function ensureUI() {
+        if (!document.getElementById('mg-panel') && window.location.pathname.startsWith('/kurs/')) {
+            createUI();
+        }
+    }
+
+    // -- Obsługa nawigacji SPA/PJAX --
+    // Gdy strona podmienia document.body.innerHTML (PJAX), MutationObserver wykryje
+    // usunięcie #mg-panel i ponownie go wstrzyknie.
+    const _mgBodyObserver = new MutationObserver(() => setTimeout(ensureUI, 150));
+
+    function _startMgObserver() {
+        if (document.body) {
+            _mgBodyObserver.observe(document.body, { childList: true });
+        }
+    }
+
+    // Przechwycenie history.pushState / replaceState (SPA routing)
+    (function () {
+        const _origPush = history.pushState;
+        history.pushState = function (...args) {
+            _origPush.apply(history, args);
+            setTimeout(ensureUI, 200);
+        };
+        const _origReplace = history.replaceState;
+        history.replaceState = function (...args) {
+            _origReplace.apply(history, args);
+            setTimeout(ensureUI, 200);
+        };
+    })();
+
+    // Nawigacja przyciskami Wstecz/Dalej
+    window.addEventListener('popstate', () => setTimeout(ensureUI, 200));
+
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', createUI);
+        document.addEventListener('DOMContentLoaded', () => {
+            ensureUI();
+            _startMgObserver();
+        });
     } else {
-        createUI();
+        ensureUI();
+        _startMgObserver();
     }
 })();
